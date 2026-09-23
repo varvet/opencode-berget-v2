@@ -18,19 +18,20 @@ persisting refreshed tokens.
 ## Install
 
 ```sh
-git clone https://github.com/varvet/opencode-berget-v2
-cd opencode-berget-v2
-bun install
+opencode plugin add github:varvet/opencode-berget-v2
 ```
 
-Add the clone's absolute path to `~/.config/opencode/opencode.json`:
+Pin a commit with `github:varvet/opencode-berget-v2#<sha>` if you prefer. Then `/connect` in
+OpenCode or `opencode auth login berget`.
+
+To work on it locally instead, clone it, run `bun install`, and put the clone's absolute path
+in `~/.config/opencode/opencode.json`:
 
 ```json
 { "plugins": ["/path/to/opencode-berget-v2"] }
 ```
 
-Restart the server (`opencode service restart`), then `/connect` in OpenCode or
-`opencode auth login berget`.
+OpenCode hot-reloads the plugin when `index.ts` changes.
 
 ## Stopgap
 
