@@ -3,72 +3,82 @@ import type {
   IntegrationOAuthMethodRegistration,
 } from '@opencode/plugin/promise/integration';
 
-import BergetAuthPlugin, { type AuthOAuthResult } from '@bergetai/opencode-auth';
+import v1Plugin, { type AuthOAuthResult as V1LoginResult } from '@bergetai/opencode-auth';
 import { Credential, Integration, Plugin } from '@opencode/plugin';
 
-type Hooks = Awaited<ReturnType<typeof BergetAuthPlugin>>;
-type OAuthMethod = Extract<NonNullable<Hooks['auth']>['methods'][number], { type: 'oauth' }>;
+type V1Hooks = Awaited<ReturnType<typeof v1Plugin>>;
+type V1Method = NonNullable<V1Hooks['auth']>['methods'][number];
+type V1OAuthMethod = Extract<V1Method, { type: 'oauth' }>;
 
 const integrationID = Integration.ID.make('berget');
-const apiUrl = () => process.env.BERGET_API_URL || 'https://api.berget.ai';
-
-function toCredential(methodID: Integration.MethodID, result: AuthOAuthResult): Credential.OAuth {
-  if (result.type === 'failed') throw new Error(result.error ?? 'Authentication failed');
-  if (!('refresh' in result)) throw new Error('Authorization did not return OAuth tokens');
-  const { access, refresh, expires } = result;
-  return Credential.OAuth.make({ type: 'oauth', methodID, access, refresh, expires });
-}
-
-// Both Berget flows complete on their own (callback server / device polling)
-function toAuthorization(
-  methodID: Integration.MethodID,
-  result: Awaited<ReturnType<OAuthMethod['authorize']>>,
-): IntegrationOAuthAuthorization {
-  if (result.method !== 'auto') throw new Error(`Unsupported authorize method: ${result.method}`);
-  const callback = result.callback as () => Promise<AuthOAuthResult>;
-  const { url, instructions } = result;
-  return { url, instructions, mode: 'auto', callback: callback().then((r) => toCredential(methodID, r)) };
-}
-
-// v1 refreshes inside its custom fetch and doesn't export it
-async function refresh(credential: Credential.OAuth): Promise<Credential.OAuth> {
-  const response = await fetch(`${apiUrl()}/v1/auth/refresh`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ refresh_token: credential.refresh }),
-  });
-  if (!response.ok) throw new Error(`Berget token refresh failed: HTTP ${response.status}`);
-  const data = (await response.json()) as { token?: unknown; expires_in?: unknown; refresh_token?: unknown };
-  if (typeof data.token !== 'string' || typeof data.expires_in !== 'number') {
-    throw new Error('Berget token refresh returned an invalid response');
-  }
-  return Credential.OAuth.make({
-    ...credential,
-    access: data.token,
-    expires: Date.now() + data.expires_in * 1000,
-    refresh: typeof data.refresh_token === 'string' ? data.refresh_token : credential.refresh,
-  });
-}
-
-function oauthMethod(method: OAuthMethod, index: number): IntegrationOAuthMethodRegistration {
-  // v1 methods carry no id; stored credentials reference this, so keep it position-stable
-  const methodID = Integration.MethodID.make(`oauth-${index}`);
-  return {
-    integrationID,
-    method: { id: methodID, type: 'oauth', label: method.label },
-    authorize: async () => toAuthorization(methodID, await method.authorize()),
-    refresh,
-  };
-}
+const refreshUrl = () => `${process.env.BERGET_API_URL || 'https://api.berget.ai'}/v1/auth/refresh`;
 
 export default Plugin.define({
   id: 'berget.auth.v2-adapter',
   async setup(ctx) {
     // v1 only uses `client` to persist refreshed tokens; v2 persists what `refresh` returns
-    const hooks = await BergetAuthPlugin({ client: { auth: { set: async () => ({}) } } } as never);
-    const methods = (hooks.auth?.methods ?? []).filter((m): m is OAuthMethod => m.type === 'oauth');
+    const v1 = await v1Plugin({ client: { auth: { set: async () => ({}) } } } as never);
+    const v1Methods = v1.auth?.methods ?? [];
+    const oauthMethods = v1Methods.filter((method) => method.type === 'oauth');
+
     await ctx.integration.transform((editor) => {
-      methods.forEach((method, index) => editor.method.update(oauthMethod(method, index)));
+      oauthMethods.forEach((method, index) => editor.method.update(toV2Method(method, index)));
     });
   },
 });
+
+function toV2Method(v1Method: V1OAuthMethod, index: number): IntegrationOAuthMethodRegistration {
+  // v1 methods carry no id; stored credentials reference this, so keep it position-stable
+  const methodID = Integration.MethodID.make(`oauth-${index}`);
+  return {
+    integrationID,
+    method: { id: methodID, type: 'oauth', label: v1Method.label },
+    authorize: () => authorize(v1Method, methodID),
+    refresh,
+  };
+}
+
+async function authorize(
+  v1Method: V1OAuthMethod,
+  methodID: Integration.MethodID,
+): Promise<IntegrationOAuthAuthorization> {
+  const { url, instructions, method, callback } = await v1Method.authorize();
+  // Both Berget flows complete on their own (callback server / device polling)
+  if (method !== 'auto') throw new Error(`Unsupported authorize method: ${method}`);
+
+  const waitForLogin = callback as () => Promise<V1LoginResult>;
+  const credential = waitForLogin().then((result) => toCredential(result, methodID));
+  return { url, instructions, mode: 'auto', callback: credential };
+}
+
+function toCredential(result: V1LoginResult, methodID: Integration.MethodID): Credential.OAuth {
+  if (result.type === 'failed') throw new Error(result.error ?? 'Authentication failed');
+  // v1's result type also covers API keys, which its OAuth methods never return
+  if (!('refresh' in result)) throw new Error('Authorization did not return OAuth tokens');
+
+  const { access, refresh, expires } = result;
+  return Credential.OAuth.make({ type: 'oauth', methodID, access, refresh, expires });
+}
+
+// v1 refreshes inside its custom fetch and doesn't export it
+async function refresh(credential: Credential.OAuth): Promise<Credential.OAuth> {
+  const response = await fetch(refreshUrl(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refresh_token: credential.refresh }),
+  });
+  if (!response.ok) throw new Error(`Berget token refresh failed: HTTP ${response.status}`);
+
+  const { token, expires_in, refresh_token } = (await response.json()) as Record<string, unknown>;
+  if (typeof token !== 'string' || typeof expires_in !== 'number') {
+    throw new Error('Berget token refresh returned an invalid response');
+  }
+
+  return Credential.OAuth.make({
+    ...credential,
+    access: token,
+    expires: Date.now() + expires_in * 1000,
+    // Berget may rotate the refresh token
+    refresh: typeof refresh_token === 'string' ? refresh_token : credential.refresh,
+  });
+}

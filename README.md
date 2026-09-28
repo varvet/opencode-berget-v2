@@ -36,6 +36,17 @@ in `~/.config/opencode/opencode.json`:
 
 OpenCode hot-reloads the plugin when `index.ts` changes.
 
+## How it works
+
+`index.ts` calls the v1 plugin and registers its two OAuth methods with OpenCode v2, as
+`oauth-0` (browser) and `oauth-1` (device/QR). v1 still performs the login; the adapter
+translates its result into a v2 credential.
+
+Token refresh is the one thing reimplemented, since v1 does not export it: a single `POST` to
+`/v1/auth/refresh`, without v1's retries.
+
+v1's provider and model setup is unused, since OpenCode's catalog covers it.
+
 ## Stopgap
 
 Delete this once Berget ships a v2-native plugin and point `plugins` at their package instead.
