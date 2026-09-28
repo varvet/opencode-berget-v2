@@ -1,22 +1,22 @@
 # opencode-berget-v2
 
-Makes [`@bergetai/opencode-auth`](https://github.com/berget-ai/opencode-berget-auth) work on
-OpenCode v2.
+Berget AI login for OpenCode v2.
 
 > [!WARNING]
-> This is a stopgap and is not maintained long-term. Rely on it at your own risk.
+> Stopgap until Berget ships a v2 plugin. Not maintained long-term. Rely on it at your own
+> risk.
 
-The published plugin targets the v1 plugin API and fails to load on v2:
+## Why
+
+[`@bergetai/opencode-auth`](https://github.com/berget-ai/opencode-berget-auth) targets the v1
+plugin API and fails to load on v2:
 
 ```
 Plugin must export a default definition with an id and an effect or setup function.
 ```
 
-OpenCode's built-in catalog already defines the `berget` provider (base URL, models, API key
-and `BERGET_API_KEY` methods). This adapter adds only what v2 lacks: it runs the v1 plugin and
-registers its two OAuth login methods (browser PKCE, device/QR) as OpenCode v2 integration
-methods, plus token refresh. OpenCode handles credential storage, Bearer injection and
-persisting refreshed tokens.
+OpenCode v2 has the `berget` provider, its models and API key login built in. OAuth login is
+missing.
 
 ## Install
 
@@ -24,37 +24,30 @@ persisting refreshed tokens.
 opencode plugin add github:varvet/opencode-berget-v2
 ```
 
-Pin a commit with `github:varvet/opencode-berget-v2#<sha>` if you prefer. Then `/connect` in
-OpenCode or `opencode auth login berget`.
+Then `/connect` in OpenCode, or `opencode auth login berget`.
 
-To work on it locally instead, clone it, run `bun install`, and put the clone's absolute path
-in `~/.config/opencode/opencode.json`:
+Append `#<sha>` to pin a commit.
+
+## How it works
+
+`index.ts` calls the v1 plugin and registers its two OAuth methods (browser, device/QR) with
+v2. v1 does the login. The adapter converts the result to a v2 credential.
+
+Token refresh is reimplemented because v1 doesn't export it. It is a single `POST` to
+`/v1/auth/refresh`, with none of v1's retries.
+
+## Development
+
+Clone, `bun install`, and add the path to `~/.config/opencode/opencode.json`:
 
 ```json
 { "plugins": ["/path/to/opencode-berget-v2"] }
 ```
 
-OpenCode hot-reloads the plugin when `index.ts` changes.
-
-## How it works
-
-`index.ts` calls the v1 plugin and registers its two OAuth methods with OpenCode v2, as
-`oauth-0` (browser) and `oauth-1` (device/QR). v1 still performs the login; the adapter
-translates its result into a v2 credential.
-
-Token refresh is the one thing reimplemented, since v1 does not export it: a single `POST` to
-`/v1/auth/refresh`, without v1's retries.
-
-v1's provider and model setup is unused, since OpenCode's catalog covers it.
-
-## Stopgap
-
-Delete this once Berget ships a v2-native plugin and point `plugins` at their package instead.
-
-## Development
+OpenCode hot-reloads when `index.ts` changes.
 
 ```sh
 bun run typecheck
 ```
 
-`@opencode/plugin` must match the installed OpenCode version (`opencode --version`).
+`@opencode/plugin` must match `opencode --version`.
