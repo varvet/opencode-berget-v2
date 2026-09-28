@@ -3,6 +3,9 @@
 Makes [`@bergetai/opencode-auth`](https://github.com/berget-ai/opencode-berget-auth) work on
 OpenCode v2.
 
+> [!WARNING]
+> This is a stopgap and is not maintained long-term. Rely on it at your own risk.
+
 The published plugin targets the v1 plugin API and fails to load on v2:
 
 ```
